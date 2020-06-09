@@ -15,8 +15,8 @@ extra-source-files:  CHANGELOG.md
 
 executable Journal
   main-is:             Main.hs
-  other-modules:       Parser, Eval, Types
+  other-modules:       AST, Parser, Eval
   -- other-extensions:
-  build-depends:       parsec, base >=4.14 && <4.15
+  build-depends:       mtl, parsec, base >=4.14 && <4.15
   -- hs-source-dirs:
   default-language:    Haskell2010

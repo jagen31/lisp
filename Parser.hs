@@ -1,8 +1,13 @@
 module Parser (parseText, parseSexpr) where
 
+import Eval
+import AST
+
 import Text.Parsec
 import Data.Either
-import Types
+import Control.Monad.Reader
+
+data Sexpr = List [Sexpr] | Sym String | Str String | Numb Int deriving Show
 
 lispP :: Parsec String st Sexpr
 lispP = listP <|> symP <|> stringP <|> numberP
@@ -34,27 +39,46 @@ numberP = do
 parseText :: String -> Either ParseError Sexpr
 parseText = parse (do {result <- lispP ; eof ; return result}) "Parse Error"
 
-parseSexpr :: Sexpr -> AST
-parseSexpr (Numb n) = ANumb n
-parseSexpr (Str s) = AStr s
-parseSexpr (Sym "true") = ABool True
-parseSexpr (Sym "false") = ABool False
-parseSexpr (Sym s) = AId s
+parseSexpr :: Sexpr -> Reader Env AST
+parseSexpr (Numb n) = return $ ANumb n
+parseSexpr (Str s) = return $ AStr s
+parseSexpr (Sym "true") = return $ ABool True
+parseSexpr (Sym "false") = return $ ABool False
+parseSexpr (Sym s) = return $ AId s
+parseSexpr (List ((Sym "let-syntax"):more)) = parseLetSyntax more
 parseSexpr (List ((Sym "let"):more)) = parseLet more
 parseSexpr (List ((Sym "fun"):more)) = parseFun more
-parseSexpr (List (fun:args)) = ACall (parseSexpr fun) (map parseSexpr args)
+parseSexpr (List (fun:args)) = do 
+  fun' <- parseSexpr fun
+  args' <- sequence (map parseSexpr args)
+  return $ ACall fun' args'
 parseSexpr (List []) = error "empty parens"
 
 symToString :: Sexpr -> String
 symToString (Sym s) = s
 symToString bad = error $ "Not a symbol in " <> show bad
 
-parseLet [(List bindings), body] = 
-  let (names, exprs) = foldr trans ([],[]) bindings in
-    ALet names exprs $ parseSexpr body
-  where trans (List [n,e]) (ns,es) = ((symToString n):ns, (parseSexpr e):es)
-        trans _ _ = error $ "invalid binding syntax in: " <> show bindings
+trans :: [Sexpr] -> ([String], [Reader Env AST])
+trans li = foldr go ([], []) li
+  where go (List [n,e]) (ns,es) = ((symToString n):ns, (parseSexpr e):es)
+
+parseLet :: [Sexpr] -> Reader Env AST
+parseLet [List bindings, body] = do
+  let (names, exprs) = trans bindings
+  body' <- parseSexpr body
+  env <- ask
+  return $ ALet names (map (`runReader` env) exprs) body'
 parseLet other = error $ "invalid let syntax in: " <> show other
 
-parseFun [List args, body] = AFun (map symToString args) $ parseSexpr body
+parseLetSyntax :: [Sexpr] -> Reader Env AST
+parseLetSyntax [List bindings, body] = do
+  let (names, exprs) = trans bindings
+  env <- ask
+  local (++ (zip names $ runReader (sequence (map (>>= eval) exprs)) env)) $ parseSexpr body
+parseLetSyntax other = error $ "invlalid let-syntax syntax in: " <> show other
+
+parseFun :: [Sexpr] -> Reader Env AST
+parseFun [List args, body] = do 
+  body' <- parseSexpr body
+  return $ AFun (map symToString args) body'
 parseFun _ = error "invalid fun syntax"
